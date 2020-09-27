@@ -199,7 +199,7 @@ static void MatchSwitchFoldOps(tf_executor::SwitchOp switch_op,
 // Folds merge nodes with only a single non-dead input.
 static LogicalResult FoldMergeNodes(FuncOp function, const DeadQueue& queue) {
   // Create builder for val_index of MergeOp.
-  auto* block = &function.getBlocks().front();
+  auto* block = &function.front();
   OpBuilder builder = OpBuilder::atBlockEnd(block);
   auto type = builder.getIntegerType(32);
   auto build_index = [&](Location loc, int value) {
@@ -240,7 +240,7 @@ static LogicalResult FoldMergeNodes(FuncOp function, const DeadQueue& queue) {
       auto def_op = val.getDefiningOp();
 #ifndef NDEBUG
       auto exec_dialect =
-          function.getContext()->getRegisteredDialect("tf_executor");
+          function.getContext()->getLoadedDialect("tf_executor");
       assert(def_op->getDialect() == exec_dialect &&
              "unable to forward control dependencies");
 #endif

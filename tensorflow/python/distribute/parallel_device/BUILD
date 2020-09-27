@@ -1,6 +1,3 @@
-load("//tensorflow:tensorflow.bzl", "tf_custom_op_library", "tf_gen_op_wrapper_py")
-load("//tensorflow:tensorflow.bzl", "tf_custom_op_py_library")
-
 package(
     default_visibility = ["//tensorflow:internal"],
     licenses = ["notice"],  # Apache 2.0
@@ -17,9 +14,9 @@ py_library(
     srcs = ["parallel_device.py"],
     srcs_version = "PY2AND3",
     deps = [
-        ":parallel_device_ops",
         ":saving",
         "//tensorflow/python:_pywrap_parallel_device",
+        "//tensorflow/python/distribute:device_util",
     ],
 )
 
@@ -30,25 +27,6 @@ py_library(
     deps = ["//tensorflow/python:framework_ops"],
 )
 
-tf_gen_op_wrapper_py(
-    name = "parallel_device_ops_py",
-    out = "gen_parallel_device_ops.py",
-    deps = ["//tensorflow/c/eager/parallel_device:parallel_device_ops"],
-)
-
-tf_custom_op_library(
-    name = "_parallel_device_ops.so",
-    srcs = ["//tensorflow/c/eager/parallel_device:parallel_device_ops_srcs"],
-)
-
-tf_custom_op_py_library(
-    name = "parallel_device_ops",
-    dso = [":_parallel_device_ops.so"],
-    kernels = ["//tensorflow/c/eager/parallel_device:parallel_device_ops"],
-    visibility = ["//tensorflow:internal"],
-    deps = [":parallel_device_ops_py"],
-)
-
 py_test(
     name = "parallel_device_test",
     srcs = ["parallel_device_test.py"],
@@ -56,6 +34,8 @@ py_test(
     tags = [
         # Dependencies aren't otherwise included in the pip package yet.
         "no_pip",
+        # MRO broken; needs investigation
+        "no_windows",
     ],
     deps = [
         ":parallel_device",

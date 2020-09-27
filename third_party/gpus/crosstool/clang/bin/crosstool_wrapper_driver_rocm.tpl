@@ -34,8 +34,6 @@ HIPCC_ENV = '%{hipcc_env}'
 HIPCC_IS_HIPCLANG = '%{hipcc_is_hipclang}'=="True"
 HIP_RUNTIME_PATH = '%{hip_runtime_path}'
 HIP_RUNTIME_LIBRARY = '%{hip_runtime_library}'
-HCC_RUNTIME_PATH = '%{hcc_runtime_path}'
-HCC_RUNTIME_LIBRARY = '%{hcc_runtime_library}'
 ROCR_RUNTIME_PATH = '%{rocr_runtime_path}'
 ROCR_RUNTIME_LIBRARY = '%{rocr_runtime_library}'
 VERBOSE = '%{crosstool_verbose}'=='1'
@@ -119,6 +117,23 @@ def GetHipccOptions(argv):
     options = _update_options(sum(args.hipcc_options, []))
     return ' '.join(['--'+a for a in options])
   return ''
+
+
+def system(cmd):
+  """Invokes cmd with os.system().
+
+  Args:
+    cmd: The command.
+
+  Returns:
+    The exit code if the process exited with exit() or -signal
+    if the process was terminated by a signal.
+  """
+  retv = os.system(cmd)
+  if os.WIFEXITED(retv):
+    return os.WEXITSTATUS(retv)
+  else:
+    return -os.WTERMSIG(retv)
 
 
 def InvokeHipcc(argv, log=False):
@@ -215,7 +230,7 @@ def InvokeHipcc(argv, log=False):
         + cmd
   if log: Log(cmd)
   if VERBOSE: print(cmd)
-  return os.system(cmd)
+  return system(cmd)
 
 
 def main():
@@ -250,11 +265,6 @@ def main():
     gpu_linker_flags.append('-L' + ROCR_RUNTIME_PATH)
     gpu_linker_flags.append('-Wl,-rpath=' + ROCR_RUNTIME_PATH)
     gpu_linker_flags.append('-l' + ROCR_RUNTIME_LIBRARY)
-    # do not link with HCC runtime library in case hip-clang toolchain is used
-    if not HIPCC_IS_HIPCLANG:
-      gpu_linker_flags.append('-L' + HCC_RUNTIME_PATH)
-      gpu_linker_flags.append('-Wl,-rpath=' + HCC_RUNTIME_PATH)
-      gpu_linker_flags.append('-l' + HCC_RUNTIME_LIBRARY)
     gpu_linker_flags.append('-L' + HIP_RUNTIME_PATH)
     gpu_linker_flags.append('-Wl,-rpath=' + HIP_RUNTIME_PATH)
     gpu_linker_flags.append('-l' + HIP_RUNTIME_LIBRARY)

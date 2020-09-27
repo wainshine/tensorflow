@@ -27,6 +27,7 @@ limitations under the License.
 #include "tensorflow/lite/kernels/internal/compatibility.h"
 #include "tensorflow/lite/kernels/internal/tensor_ctypes.h"
 #include "tensorflow/lite/kernels/kernel_util.h"
+#include "tensorflow/lite/micro/all_ops_resolver.h"
 #include "tensorflow/lite/micro/micro_utils.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
@@ -55,7 +56,7 @@ class StackAllocator : public flatbuffers::Allocator {
     return *inst;
   }
 
-  static constexpr size_t kStackAllocatorSize = 4096;
+  static constexpr size_t kStackAllocatorSize = 8192;
 
  private:
   uint8_t data_backing_[kStackAllocatorSize];
@@ -101,10 +102,16 @@ class ModelBuilder {
   Node AddNode(Operator op, std::initializer_list<Tensor> inputs,
                std::initializer_list<Tensor> outputs);
 
+  void AddMetadata(const char* description_string,
+                   const int32_t* metadata_buffer_data, size_t num_elements);
+
   // Constructs the flatbuffer model using `builder_` and return a pointer to
   // it. The returned model has the same lifetime as `builder_`.
+  // Note the default value of 0 for num_subgraph_inputs means all tensor inputs
+  // are in subgraph input list.
   const Model* BuildModel(std::initializer_list<Tensor> inputs,
-                          std::initializer_list<Tensor> outputs);
+                          std::initializer_list<Tensor> outputs,
+                          size_t num_subgraph_inputs = 0);
 
  private:
   // Adds a tensor to the model.
@@ -123,6 +130,16 @@ class ModelBuilder {
 
   static constexpr int kMaxTensors = 50;
   flatbuffers::Offset<tflite::Tensor> tensors_[kMaxTensors];
+
+  static constexpr int kMaxMetadataBuffers = 10;
+
+  static constexpr int kMaxMetadatas = 10;
+  flatbuffers::Offset<Metadata> metadata_[kMaxMetadatas];
+
+  flatbuffers::Offset<Buffer> metadata_buffers_[kMaxMetadataBuffers];
+
+  int nbr_of_metadata_buffers_ = 0;
+
   int next_tensor_id_ = 0;
 };
 
@@ -149,29 +166,75 @@ ModelBuilder::Node ModelBuilder::AddNode(
   return next_operator_id_ - 1;
 }
 
+void ModelBuilder::AddMetadata(const char* description_string,
+                               const int32_t* metadata_buffer_data,
+                               size_t num_elements) {
+  metadata_[ModelBuilder::nbr_of_metadata_buffers_] =
+      CreateMetadata(*builder_, builder_->CreateString(description_string),
+                     1 + ModelBuilder::nbr_of_metadata_buffers_);
+
+  metadata_buffers_[nbr_of_metadata_buffers_] = tflite::CreateBuffer(
+      *builder_, builder_->CreateVector((uint8_t*)metadata_buffer_data,
+                                        sizeof(uint32_t) * num_elements));
+
+  ModelBuilder::nbr_of_metadata_buffers_++;
+}
+
 const Model* ModelBuilder::BuildModel(
     std::initializer_list<ModelBuilder::Tensor> inputs,
-    std::initializer_list<ModelBuilder::Tensor> outputs) {
+    std::initializer_list<ModelBuilder::Tensor> outputs,
+    size_t num_subgraph_inputs) {
   // Model schema requires an empty buffer at idx 0.
-  constexpr size_t kBufferSize = 1;
-  const flatbuffers::Offset<Buffer> buffers[kBufferSize] = {
-      tflite::CreateBuffer(*builder_)};
+  size_t buffer_size = 1 + ModelBuilder::nbr_of_metadata_buffers_;
+  flatbuffers::Offset<Buffer> buffers[kMaxMetadataBuffers];
+  buffers[0] = tflite::CreateBuffer(*builder_);
+
+  // Place the metadata buffers first in the buffer since the indices for them
+  // have already been set in AddMetadata()
+  for (int i = 1; i < ModelBuilder::nbr_of_metadata_buffers_ + 1; ++i) {
+    buffers[i] = metadata_buffers_[i - 1];
+  }
 
   // TFLM only supports single subgraph.
   constexpr size_t subgraphs_size = 1;
+
+  // Find out number of subgraph inputs.
+  if (num_subgraph_inputs == 0) {
+    // This is the default case.
+    num_subgraph_inputs = inputs.size();
+  } else {
+    // A non-zero value of num_subgraph_inputs means that some of
+    // the operator input tensors are not subgraph inputs.
+    TFLITE_DCHECK(num_subgraph_inputs < inputs.size());
+  }
+
   const flatbuffers::Offset<SubGraph> subgraphs[subgraphs_size] = {
       tflite::CreateSubGraph(
           *builder_, builder_->CreateVector(tensors_, next_tensor_id_),
-          builder_->CreateVector(inputs.begin(), inputs.size()),
+          builder_->CreateVector(inputs.begin(), num_subgraph_inputs),
           builder_->CreateVector(outputs.begin(), outputs.size()),
           builder_->CreateVector(operators_, next_operator_id_),
           builder_->CreateString("test_subgraph"))};
-  const flatbuffers::Offset<Model> model_offset = tflite::CreateModel(
-      *builder_, 0,
-      builder_->CreateVector(operator_codes_, next_operator_code_id_),
-      builder_->CreateVector(subgraphs, subgraphs_size),
-      builder_->CreateString("teset_model"),
-      builder_->CreateVector(buffers, kBufferSize));
+
+  flatbuffers::Offset<Model> model_offset;
+  if (ModelBuilder::nbr_of_metadata_buffers_ > 0) {
+    model_offset = tflite::CreateModel(
+        *builder_, 0,
+        builder_->CreateVector(operator_codes_, next_operator_code_id_),
+        builder_->CreateVector(subgraphs, subgraphs_size),
+        builder_->CreateString("teset_model"),
+        builder_->CreateVector(buffers, buffer_size), 0,
+        builder_->CreateVector(metadata_,
+                               ModelBuilder::nbr_of_metadata_buffers_));
+  } else {
+    model_offset = tflite::CreateModel(
+        *builder_, 0,
+        builder_->CreateVector(operator_codes_, next_operator_code_id_),
+        builder_->CreateVector(subgraphs, subgraphs_size),
+        builder_->CreateString("teset_model"),
+        builder_->CreateVector(buffers, buffer_size));
+  }
+
   tflite::FinishModelBuffer(*builder_, model_offset);
   void* model_pointer = builder_->GetBufferPointer();
   const Model* model = flatbuffers::GetRoot<Model>(model_pointer);
@@ -248,6 +311,36 @@ const Model* BuildSimpleModelWithBranch() {
   model_builder.AddNode(op_id, {t0}, {t2});      // n1
   model_builder.AddNode(op_id, {t1, t2}, {t3});  // n2
   return model_builder.BuildModel({t0}, {t3});
+}
+
+const Model* BuildModelWithOfflinePlanning(int number_of_tensors,
+                                           const int32_t* metadata_buffer,
+                                           NodeConnection* node_conn,
+                                           int num_conns,
+                                           int num_subgraph_inputs) {
+  using flatbuffers::Offset;
+  flatbuffers::FlatBufferBuilder* fb_builder = BuilderInstance();
+
+  ModelBuilder model_builder(fb_builder);
+
+  const int op_id =
+      model_builder.RegisterOp(BuiltinOperator_CUSTOM, "mock_custom",
+                               /* version= */ 0);
+
+  for (int i = 0; i < number_of_tensors; ++i) {
+    model_builder.AddTensor(TensorType_FLOAT32, {2, 2, 3});
+  }
+
+  for (int i = 0; i < num_conns; ++i) {
+    model_builder.AddNode(op_id, node_conn[i].input, node_conn[i].output);
+  }
+
+  model_builder.AddMetadata(
+      "OfflineMemoryAllocation", metadata_buffer,
+      number_of_tensors + tflite::testing::kOfflinePlannerHeaderSize);
+
+  return model_builder.BuildModel(
+      node_conn[0].input, node_conn[num_conns - 1].output, num_subgraph_inputs);
 }
 
 const Model* BuildSimpleMockModel() {
@@ -480,6 +573,10 @@ const Model* BuildComplexMockModel() {
 }  // namespace
 
 const TfLiteRegistration* SimpleStatefulOp::getRegistration() {
+  return GetMutableRegistration();
+}
+
+TfLiteRegistration* SimpleStatefulOp::GetMutableRegistration() {
   static TfLiteRegistration r;
   r.init = Init;
   r.prepare = Prepare;
@@ -493,9 +590,7 @@ void* SimpleStatefulOp::Init(TfLiteContext* context, const char* buffer,
   TFLITE_DCHECK(context->GetScratchBuffer == nullptr);
   TFLITE_DCHECK(context->RequestScratchBufferInArena == nullptr);
 
-  void* raw;
-  TFLITE_DCHECK(context->AllocatePersistentBuffer(context, sizeof(OpData),
-                                                  &raw) == kTfLiteOk);
+  void* raw = context->AllocatePersistentBuffer(context, sizeof(OpData));
   OpData* data = reinterpret_cast<OpData*>(raw);
   *data = {};
   return raw;
@@ -505,8 +600,9 @@ TfLiteStatus SimpleStatefulOp::Prepare(TfLiteContext* context,
                                        TfLiteNode* node) {
   OpData* data = reinterpret_cast<OpData*>(node->user_data);
 
-  // Make sure that the input is in uint8 with at least 1 data entry.
-  const TfLiteTensor* input = tflite::GetInput(context, node, kInputTensor);
+  // Make sure that the input is in uint8_t with at least 1 data entry.
+  const TfLiteTensor* input;
+  TF_LITE_ENSURE_OK(context, GetInputSafe(context, node, kInputTensor, &input));
   if (input->type != kTfLiteUInt8) return kTfLiteError;
   if (NumElements(input->dims) == 0) return kTfLiteError;
 
@@ -514,15 +610,21 @@ TfLiteStatus SimpleStatefulOp::Prepare(TfLiteContext* context,
   TF_LITE_ENSURE_STATUS(context->RequestScratchBufferInArena(
       context, sizeof(uint8_t) * NumElements(input->dims),
       &data->sorting_buffer));
+  // We can interleave scratch / persistent buffer allocation.
+  data->invoke_count = reinterpret_cast<int*>(
+      context->AllocatePersistentBuffer(context, sizeof(int)));
+  *data->invoke_count = 0;
+
   return kTfLiteOk;
 }
 
 TfLiteStatus SimpleStatefulOp::Invoke(TfLiteContext* context,
                                       TfLiteNode* node) {
   OpData* data = reinterpret_cast<OpData*>(node->user_data);
-  data->invoke_count += 1;
+  *data->invoke_count += 1;
 
-  const TfLiteTensor* input = GetInput(context, node, kInputTensor);
+  const TfLiteTensor* input;
+  TF_LITE_ENSURE_OK(context, GetInputSafe(context, node, kInputTensor, &input));
   const uint8_t* input_data = GetTensorData<uint8_t>(input);
   int size = NumElements(input->dims);
 
@@ -541,17 +643,25 @@ TfLiteStatus SimpleStatefulOp::Invoke(TfLiteContext* context,
     }
   }
 
-  TfLiteTensor* median = GetOutput(context, node, kMedianTensor);
+  TfLiteTensor* median;
+  TF_LITE_ENSURE_OK(context,
+                    GetOutputSafe(context, node, kMedianTensor, &median));
   uint8_t* median_data = GetTensorData<uint8_t>(median);
-  TfLiteTensor* invoke_count = GetOutput(context, node, kInvokeCount);
+  TfLiteTensor* invoke_count;
+  TF_LITE_ENSURE_OK(context,
+                    GetOutputSafe(context, node, kInvokeCount, &invoke_count));
   int32_t* invoke_count_data = GetTensorData<int32_t>(invoke_count);
 
   median_data[0] = sorting_buffer[size / 2];
-  invoke_count_data[0] = data->invoke_count;
+  invoke_count_data[0] = *data->invoke_count;
   return kTfLiteOk;
 }
 
 const TfLiteRegistration* MockCustom::getRegistration() {
+  return GetMutableRegistration();
+}
+
+TfLiteRegistration* MockCustom::GetMutableRegistration() {
   static TfLiteRegistration r;
   r.init = Init;
   r.prepare = Prepare;
@@ -577,11 +687,14 @@ TfLiteStatus MockCustom::Prepare(TfLiteContext* context, TfLiteNode* node) {
 }
 
 TfLiteStatus MockCustom::Invoke(TfLiteContext* context, TfLiteNode* node) {
-  const TfLiteTensor* input = tflite::GetInput(context, node, 0);
+  const TfLiteTensor* input;
+  TF_LITE_ENSURE_OK(context, GetInputSafe(context, node, 0, &input));
   const int32_t* input_data = input->data.i32;
-  const TfLiteTensor* weight = tflite::GetInput(context, node, 1);
+  const TfLiteTensor* weight;
+  TF_LITE_ENSURE_OK(context, GetInputSafe(context, node, 1, &weight));
   const uint8_t* weight_data = weight->data.uint8;
-  TfLiteTensor* output = GetOutput(context, node, 0);
+  TfLiteTensor* output;
+  TF_LITE_ENSURE_OK(context, GetOutputSafe(context, node, 0, &output));
   int32_t* output_data = output->data.i32;
   output_data[0] =
       0;  // Catch output tensor sharing memory with an input tensor
@@ -591,27 +704,13 @@ TfLiteStatus MockCustom::Invoke(TfLiteContext* context, TfLiteNode* node) {
 
 bool MockCustom::freed_ = false;
 
-const TfLiteRegistration* MockOpResolver::FindOp(BuiltinOperator op) const {
-  return nullptr;
-}
+AllOpsResolver GetOpResolver() {
+  AllOpsResolver op_resolver;
+  op_resolver.AddCustom("mock_custom", MockCustom::GetMutableRegistration());
+  op_resolver.AddCustom("simple_stateful_op",
+                        SimpleStatefulOp::GetMutableRegistration());
 
-const TfLiteRegistration* MockOpResolver::FindOp(const char* op) const {
-  if (strcmp(op, "mock_custom") == 0) {
-    return MockCustom::getRegistration();
-  } else if (strcmp(op, "simple_stateful_op") == 0) {
-    return SimpleStatefulOp::getRegistration();
-  } else {
-    return nullptr;
-  }
-}
-
-MicroOpResolver::BuiltinParseFunction MockOpResolver::GetOpDataParser(
-    tflite::BuiltinOperator) const {
-  // TODO(b/149408647): Figure out an alternative so that we do not have any
-  // references to ParseOpData in the micro code and the signature for
-  // MicroOpResolver::BuiltinParseFunction can be changed to be different from
-  // ParseOpData.
-  return ParseOpData;
+  return op_resolver;
 }
 
 const Model* GetSimpleMockModel() {
@@ -635,6 +734,16 @@ const Model* GetSimpleModelWithBranch() {
   if (!model) {
     model = const_cast<Model*>(BuildSimpleModelWithBranch());
   }
+  return model;
+}
+
+const Model* GetModelWithOfflinePlanning(int num_tensors,
+                                         const int32_t* metadata_buffer,
+                                         NodeConnection* node_conn,
+                                         int num_conns,
+                                         int num_subgraph_inputs) {
+  const Model* model = BuildModelWithOfflinePlanning(
+      num_tensors, metadata_buffer, node_conn, num_conns, num_subgraph_inputs);
   return model;
 }
 
@@ -734,11 +843,13 @@ int TestStrcmp(const char* a, const char* b) {
 
 // Wrapper to forward kernel errors to the interpreter's error reporter.
 void ReportOpError(struct TfLiteContext* context, const char* format, ...) {
+#ifndef TF_LITE_STRIP_ERROR_STRINGS
   ErrorReporter* error_reporter = static_cast<ErrorReporter*>(context->impl_);
   va_list args;
   va_start(args, format);
   TF_LITE_REPORT_ERROR(error_reporter, format, args);
   va_end(args);
+#endif
 }
 
 // Create a TfLiteIntArray from an array of ints.  The first element in the
@@ -847,8 +958,8 @@ TfLiteTensor CreateQuantizedBiasTensor(const float* data, int32_t* quantized,
   TfLiteTensor result = CreateTensor(dims, is_variable);
   result.type = kTfLiteInt32;
   result.data.i32 = const_cast<int32_t*>(quantized);
-  // Quantized int32 tensors always have a zero point of 0, since the range of
-  // int32 values is large, and because zero point costs extra cycles during
+  // Quantized int32_t tensors always have a zero point of 0, since the range of
+  // int32_t values is large, and because zero point costs extra cycles during
   // processing.
   result.params = {bias_scale, 0};
   result.quantization = {kTfLiteAffineQuantization, nullptr};
@@ -856,7 +967,7 @@ TfLiteTensor CreateQuantizedBiasTensor(const float* data, int32_t* quantized,
   return result;
 }
 
-// Quantizes int32 bias tensor with per-channel weights determined by input
+// Quantizes int32_t bias tensor with per-channel weights determined by input
 // scale multiplied by weight scale for each channel.
 TfLiteTensor CreatePerChannelQuantizedBiasTensor(
     const float* input, int32_t* quantized, TfLiteIntArray* dims,
@@ -914,6 +1025,14 @@ TfLiteTensor CreateSymmetricPerChannelQuantizedTensor(
   result.quantization = {kTfLiteAffineQuantization, affine_quant};
   result.bytes = ElementCount(*dims) * sizeof(int8_t);
   return result;
+}
+
+size_t GetModelTensorCount(const Model* model) {
+  auto* subgraphs = model->subgraphs();
+  if (subgraphs) {
+    return (*subgraphs)[0]->tensors()->size();
+  }
+  return 0;
 }
 
 }  // namespace testing

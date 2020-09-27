@@ -46,7 +46,6 @@ struct TfOp {
   absl::string_view name;
   absl::string_view type;
 };
-
 TfOp ParseTfOpFullname(absl::string_view tf_op_fullname);
 
 // Returns a vector of TF name scopes extracted from tf_op_full_name.
@@ -57,14 +56,33 @@ std::vector<absl::string_view> ParseTfNameScopes(const TfOp& tf_op);
 std::string TfOpEventName(const TfOp& tf_op);
 std::string TfOpEventName(absl::string_view tf_op_fullname);
 
+// Trace event name for dataset ops.
+std::string DatasetOpEventName(absl::string_view full_name);
+
+// Returns the iterator name without prefix and parent iterator names.
+std::string IteratorName(absl::string_view full_name);
+
 // Returns true if the given name is a TensorFlow Dataset Op.
 inline bool IsDatasetOp(absl::string_view tf_op_type) {
   return tf_op_type == kDatasetOp;
+}
+inline bool IsDatasetOp(const TfOp& tf_op) {
+  return tf_op.category == Category::kTfData;
 }
 
 // Returns true if the given name is a TensorFlow Infeed Enqueue Op.
 inline bool IsInfeedEnqueueOp(absl::string_view tf_op_type) {
   return tf_op_type == "InfeedEnqueue" || tf_op_type == "InfeedEnqueueTuple";
+}
+
+// Returns true if the given op is for outside compilation.
+inline bool IsOutsideCompilationOp(absl::string_view tf_op_fullname,
+                                   absl::string_view hlo_expression) {
+  if (absl::EndsWith(tf_op_fullname, ":XlaSendToHost")) return true;
+  if (absl::StrContains(hlo_expression, "send-done") &&
+      absl::StrContains(hlo_expression, "is_host_transfer=true"))
+    return true;
+  return false;
 }
 
 // Returns true if the given name is a TensorFlow embedding op.
@@ -86,6 +104,18 @@ inline bool IsMemcpyDToHOp(absl::string_view tf_op_type) {
 // delimited by '(' and ')' and separated by ';', into the individual shapes.
 std::vector<absl::string_view> ParseTensorShapes(
     absl::string_view tensor_shapes);
+
+// Returns true if the given string matches OpDef.name pattern.
+bool IsTfOpName(absl::string_view op_name);
+
+// Returns true if the given string matches NodeDef.name pattern.
+bool IsTfOpType(absl::string_view op_type);
+
+// Returns true if the given string matches JAX pattern.
+bool IsJaxOpType(absl::string_view op_type);
+
+// Returns true if the given strings match JAX pattern.
+bool IsJaxOpNameAndType(absl::string_view op_name, absl::string_view op_type);
 
 }  // namespace profiler
 }  // namespace tensorflow

@@ -16,6 +16,7 @@ limitations under the License.
 
 #include <stdint.h>
 
+#include <cmath>
 #include <limits>
 
 #include "tensorflow/lite/c/builtin_op_data.h"
@@ -196,8 +197,8 @@ TfLiteStatus Conv2dOpBuilder::PopulateSubGraph(const TfLiteIntArray* inputs,
   if (activation == kTfLiteActRelu6) {
     conv_output_min = 0;
     conv_output_max = 6;
-  } else if (activation == kTfLiteActRelu1) {
-    conv_output_min = 0;
+  } else if (activation == kTfLiteActReluN1To1) {
+    conv_output_min = -1;
     conv_output_max = 1;
   } else if (activation == kTfLiteActRelu) {
     conv_output_min = 0;
@@ -266,13 +267,13 @@ TfLiteStatus Conv2dOpBuilder::PopulateSubGraph(const TfLiteIntArray* inputs,
     auto* conv_op = graph_builder_->AddNode(GetTFLiteNodeID());
     conv_op->SetOpType(OP_DepthwiseSupernode_8x8p32to8);
     conv_op->AddInput(space_to_batch_op_out);
-    conv_op->AddInput(TensorID(weights_data_node_->GetID(), 0));
+    conv_op->AddInput(graph_builder_->GetHexagonTensorId(inputs->data[1]));
     conv_op->AddInput(TensorID(data_min_const->GetID(), 0));
     conv_op->AddInput(TensorID(data_max_const->GetID(), 0));
     conv_op->AddInput(TensorID(weights_min_node_->GetID(), 0));
     conv_op->AddInput(TensorID(weights_max_node_->GetID(), 0));
     conv_op->AddInput(TensorID(stride_node->GetID(), 0));
-    conv_op->AddInput(TensorID(bias_data_node_->GetID(), 0));
+    conv_op->AddInput(graph_builder_->GetHexagonTensorId(inputs->data[2]));
     conv_op->AddInput(TensorID(bias_min_node_->GetID(), 0));
     conv_op->AddInput(TensorID(bias_max_node_->GetID(), 0));
     conv_op->AddInput(TensorID(conv_output_min_const->GetID(), 0));
@@ -329,13 +330,13 @@ TfLiteStatus Conv2dOpBuilder::PopulateSubGraph(const TfLiteIntArray* inputs,
     }
     // Inputs
     AddInput(graph_builder_->GetHexagonTensorId(inputs->data[0]));
-    AddInput(TensorID(weights_data_node_->GetID(), 0));
+    AddInput(graph_builder_->GetHexagonTensorId(inputs->data[1]));
     AddInput(TensorID(data_min_const->GetID(), 0));
     AddInput(TensorID(data_max_const->GetID(), 0));
     AddInput(TensorID(weights_min_node_->GetID(), 0));
     AddInput(TensorID(weights_max_node_->GetID(), 0));
     AddInput(TensorID(stride_node->GetID(), 0));
-    AddInput(TensorID(bias_data_node_->GetID(), 0));
+    AddInput(graph_builder_->GetHexagonTensorId(inputs->data[2]));
     AddInput(TensorID(bias_min_node_->GetID(), 0));
     AddInput(TensorID(bias_max_node_->GetID(), 0));
     AddInput(TensorID(conv_output_min_const->GetID(), 0));
@@ -351,8 +352,12 @@ TfLiteStatus Conv2dOpBuilder::PopulateSubGraph(const TfLiteIntArray* inputs,
     output_max_tensor = AddOutput(sizeof(float), 4, kScalarShape);
   }
 
-  // Requantize if activation was not None.
-  if (activation != kTfLiteActNone) {
+  // Requantize if activation was not None & the TFLite tensor's min/max is
+  // different (diff > 1e-2) from the RELU bounds.
+  const float min_bound_diff = std::abs(conv_output_min - output_min);
+  const float max_bound_diff = std::abs(conv_output_max - output_max);
+  if (activation != kTfLiteActNone &&
+      (min_bound_diff > 0.01 || max_bound_diff > 0.01)) {
     auto* requantized_min_const = graph_builder_->AddConstNodeWithData(
         kScalarShape, reinterpret_cast<char*>(&output_min), sizeof(output_min));
     auto* requantized_max_const = graph_builder_->AddConstNodeWithData(

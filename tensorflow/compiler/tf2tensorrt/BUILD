@@ -3,15 +3,14 @@
 #   and provide TensorRT operators and converter package.
 #   APIs are meant to change over time.
 
+load("//tensorflow/core/platform:rules_cc.bzl", "cc_library")
 load(
     "//tensorflow:tensorflow.bzl",
     "tf_cc_test",
     "tf_copts",
     "tf_cuda_library",
     "tf_custom_op_library_additional_deps",
-    "tf_gen_op_libs",
     "tf_gen_op_wrapper_py",
-    "tf_gpu_kernel_library",
 )
 
 # buildifier: disable=same-origin-load
@@ -22,6 +21,9 @@ load("//tensorflow:tensorflow.bzl", "tf_custom_op_py_library")
 
 # buildifier: disable=same-origin-load
 load("//tensorflow:tensorflow.bzl", "pybind_extension")
+
+# buildifier: disable=same-origin-load
+load("//tensorflow:tensorflow.bzl", "tf_gen_op_libs")
 load(
     "//tensorflow/core/platform:build_config.bzl",
     "tf_additional_all_protos",
@@ -80,6 +82,16 @@ tf_cuda_cc_test(
 )
 
 cc_library(
+    name = "common_utils",
+    srcs = ["common/utils.cc"],
+    hdrs = ["common/utils.h"],
+    copts = tf_copts(),
+    deps = [
+        "//tensorflow/core/platform:logging",
+    ] + if_tensorrt([":tensorrt_lib"]),
+)
+
+cc_library(
     name = "trt_op_kernels",
     srcs = [
         "kernels/get_calibration_data_op.cc",
@@ -95,9 +107,9 @@ cc_library(
         ":trt_plugins",
         ":trt_resources",
         ":utils",
+        ":common_utils",
         "@com_google_absl//absl/memory",
         "@com_google_absl//absl/strings",
-        "@local_config_cuda//cuda:cuda_headers",
         "//tensorflow/core:framework",
         "//tensorflow/core:gpu_headers_lib",
         "//tensorflow/core:lib",
@@ -108,7 +120,10 @@ cc_library(
         "//tensorflow/core/common_runtime:core_cpu_lib_no_ops",
         "//tensorflow/core/grappler/costs:graph_properties",
         "//tensorflow/stream_executor/lib",
-    ] + if_tensorrt([":tensorrt_lib"]) + tf_custom_op_library_additional_deps(),
+    ] + if_tensorrt([
+        ":tensorrt_lib",
+        "@local_config_cuda//cuda:cuda_headers",
+    ]) + tf_custom_op_library_additional_deps(),
     alwayslink = 1,
 )
 
@@ -240,6 +255,7 @@ tf_cuda_library(
     hdrs = ["utils/trt_logger.h"],
     visibility = ["//visibility:public"],
     deps = [
+        ":common_utils",
         ":logger_registry",
         "//tensorflow/core:lib_proto_parsing",
     ] + if_tensorrt([":tensorrt_lib"]),
@@ -375,6 +391,7 @@ tf_cuda_library(
         "convert/trt_optimization_pass.h",
     ],
     deps = [
+        ":common_utils",
         ":logger_registry",
         ":segment",
         ":trt_allocator",
@@ -488,6 +505,8 @@ cc_library(
     ],
     copts = tf_copts(),
     deps = [
+        ":common_utils",
+        ":utils",
         "//tensorflow/core:graph",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
@@ -525,20 +544,6 @@ tf_cuda_cc_test(
     ],
 )
 
-tf_gpu_kernel_library(
-    name = "plugin_cast",
-    srcs = ["plugin/plugin_cast.cu.cc"],
-    deps = [
-        ":trt_plugins",
-        "@com_google_absl//absl/strings",
-        "//tensorflow/core/platform:logging",
-        "//tensorflow/core:framework_lite",
-    ] + if_tensorrt([
-        "@local_config_cuda//cuda:cuda_headers",
-        "@local_config_tensorrt//:tensorrt",
-    ]),
-)
-
 tf_cuda_library(
     name = "trt_plugins",
     srcs = ["plugin/trt_plugin.cc"],
@@ -557,6 +562,7 @@ cc_library(
     deps = [
         "@com_google_absl//absl/algorithm:container",
         "//tensorflow/core:framework",
+        "//tensorflow/core:graph",
         "//tensorflow/core:lib_proto_parsing",
         "//tensorflow/core:lib",
     ] + if_tensorrt([":tensorrt_lib"]),
@@ -575,6 +581,7 @@ cc_library(
     hdrs = ["utils/py_utils.h"],
     copts = tf_copts(),
     deps = if_tensorrt([
+        ":common_utils",
         ":tensorrt_lib",
         "//tensorflow/stream_executor/platform:dso_loader",
     ]),
@@ -586,6 +593,7 @@ pybind_extension(
     link_in_framework = True,
     module_name = "_pywrap_py_utils",
     deps = [
+        ":common_utils",
         ":py_utils",
         "//tensorflow/core/platform:env",
         "//tensorflow/core/platform:logging",

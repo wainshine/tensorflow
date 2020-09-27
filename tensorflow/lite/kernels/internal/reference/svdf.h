@@ -15,7 +15,10 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_KERNELS_INTERNAL_REFERENCE_SVDF_H_
 #define TENSORFLOW_LITE_KERNELS_INTERNAL_REFERENCE_SVDF_H_
 
+#include <stdint.h>
+
 #include <algorithm>
+#include <limits>
 
 #include "tensorflow/lite/c/builtin_op_data.h"
 #include "tensorflow/lite/c/common.h"
@@ -265,7 +268,7 @@ inline void EvalHybridSVDF(
   std::fill_n(scratch_ptr, batch_size * num_filters, 0.0f);
 
   if (!tensor_utils::IsZeroVector(input_ptr, batch_size * input_size)) {
-    // Quantize input from float to int8.
+    // Quantize input from float to int8_t.
     tensor_utils::BatchQuantizeFloats(input_ptr, batch_size, input_size,
                                       quantized_input_ptr, scaling_factors_ptr,
                                       zero_points_ptr,

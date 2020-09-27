@@ -18,9 +18,79 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+from tensorflow.python import _pywrap_tensor_float_32_execution
 from tensorflow.python.eager import context
 from tensorflow.python.util import deprecation
 from tensorflow.python.util.tf_export import tf_export
+
+
+@tf_export('config.experimental.tensor_float_32_execution_enabled')
+def tensor_float_32_execution_enabled():
+  """Returns whether TensorFloat-32 is enabled.
+
+  By default, TensorFloat-32 is enabled, but this can be changed with
+  `tf.config.experimental.enable_tensor_float_32_execution`.
+
+  Returns:
+    True if TensorFloat-32 is enabled (the default) and False otherwise
+  """
+  return _pywrap_tensor_float_32_execution.is_enabled()
+
+
+@tf_export('config.experimental.enable_tensor_float_32_execution')
+def enable_tensor_float_32_execution(enabled):
+  """Enable or disable the use of TensorFloat-32 on supported hardware.
+
+  [TensorFloat-32](https://blogs.nvidia.com/blog/2020/05/14/tensorfloat-32-precision-format),
+  or TF32 for short, is a math mode for NVIDIA Ampere GPUs. TensorFloat-32
+  execution causes certain float32 ops, such as matrix multiplications and
+  convolutions, to run much faster on Ampere GPUs but with reduced precision.
+  This reduced precision should not impact convergence of deep learning models
+  in practice.
+
+  TensorFloat-32 is enabled by default in the nightly versions of TensorFlow. We
+  expect it will remain enabled by default in the first stable version that
+  TensorFloat-32 is available, which is TensorFlow 2.4, as it increases
+  performance and does not reduce model quality in practice. If you want to use
+  the full float32 precision, you can disable TensorFloat-32 execution with this
+  function. For example:
+
+  ```python
+  x = tf.fill((2, 2), 1.0001)
+  y = tf.fill((2, 2), 1.)
+  # TensorFloat-32 is enabled, so matmul is run with reduced precision
+  print(tf.linalg.matmul(x, y))  # [[2., 2.], [2., 2.]]
+  tf.config.experimental.enable_tensor_float_32_execution(False)
+  # Matmul is run with full precision
+  print(tf.linalg.matmul(x, y))  # [[2.0002, 2.0002], [2.0002, 2.0002]]
+  ```
+
+  There is [an RFC](https://github.com/tensorflow/community/pull/287) proposing
+  that TensorFloat-32 remain enabled by default in stable versions of
+  TensorFlow. We expect the RFC to be accepted, but if it isn't, TensorFloat-32
+  will be disabled by default in TensorFlow 2.4.
+
+  To check whether TensorFloat-32 execution is currently enabled, use
+  `tf.config.experimental.tensor_float_32_execution_enabled`.
+
+  Enabling TensorFloat-32 causes float32 inputs of supported ops, such as
+  `tf.linalg.matmul`, to be rounded from 23 bits of precision to 10 bits of
+  precision in most cases. This allows the ops to execute much faster by
+  utilizing the GPU's tensor cores. TensorFloat-32 has the same dynamic range as
+  float32, meaning it is no more likely to underflow or overflow than float32.
+  Ops still use float32 accumulation when TensorFloat-32 is enabled. Enabling
+  TensorFloat-32 only affects Ampere GPUs and subsequent GPUs that support
+  TensorFloat-32.
+
+  Note TensorFloat-32 is not always used in supported ops, as only inputs of
+  certain shapes are supported. Support for more input shapes and more ops may
+  be added in the future. As a result, precision of float32 ops may decrease in
+  minor versions of TensorFlow.
+
+  Args:
+    enabled: Bool indicating whether to enable TensorFloat-32 execution.
+  """
+  _pywrap_tensor_float_32_execution.enable(enabled)
 
 
 @tf_export('config.threading.get_intra_op_parallelism_threads')
@@ -441,6 +511,33 @@ def set_visible_devices(devices, device_type=None):
     RuntimeError: Runtime is already initialized.
   """
   context.context().set_visible_devices(devices, device_type)
+
+
+@tf_export('config.experimental.get_memory_usage')
+def get_memory_usage(device):
+  """Get the memory usage, in bytes, for the chosen device.
+
+  See https://www.tensorflow.org/api_docs/python/tf/device for specifying device
+  strings.
+
+  For example:
+
+  >>> gpu_devices = tf.config.list_physical_devices('GPU')
+  >>> if gpu_devices:
+  ...   tf.config.experimental.get_memory_usage('GPU:0')
+
+  Does not work for CPU.
+
+  Args:
+    device: Device string to get the bytes in use for.
+
+  Returns:
+    Total memory usage in bytes.
+
+  Raises:
+    ValueError: Non-existent or CPU device specified.
+  """
+  return context.context().get_total_memory_usage(device)
 
 
 @tf_export('config.experimental.get_memory_growth')

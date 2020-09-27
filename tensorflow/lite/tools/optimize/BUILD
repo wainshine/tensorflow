@@ -1,3 +1,4 @@
+load("//tensorflow:tensorflow.bzl", "get_compatible_with_cloud")
 load("//tensorflow/lite:special_rules.bzl", "tflite_portable_test_suite")
 load("//tensorflow:tensorflow.bzl", "tf_cc_test")
 
@@ -102,6 +103,7 @@ cc_library(
     name = "quantization_utils",
     srcs = ["quantization_utils.cc"],
     hdrs = ["quantization_utils.h"],
+    compatible_with = get_compatible_with_cloud(),
     deps = [
         ":model_utils",
         "//tensorflow/lite:framework",
@@ -123,6 +125,7 @@ cc_library(
     name = "model_utils",
     srcs = ["model_utils.cc"],
     hdrs = ["model_utils.h"],
+    compatible_with = get_compatible_with_cloud(),
     deps = [
         ":operator_property",
         "//tensorflow/lite:framework",
@@ -157,6 +160,7 @@ cc_library(
     name = "operator_property",
     srcs = ["operator_property.cc"],
     hdrs = ["operator_property.h"],
+    compatible_with = get_compatible_with_cloud(),
     deps = [
         "//tensorflow/lite:framework",
         "//tensorflow/lite/kernels/internal:types",
@@ -196,6 +200,7 @@ cc_library(
     name = "quantize_weights",
     srcs = ["quantize_weights.cc"],
     hdrs = ["quantize_weights.h"],
+    compatible_with = get_compatible_with_cloud(),
     deps = [
         ":quantization_utils",
         ":model_utils",
@@ -286,6 +291,7 @@ tf_cc_test(
         "//tensorflow/lite/tools/optimize:testdata/maximum.bin",
         "//tensorflow/lite/tools/optimize:testdata/minimum.bin",
         "//tensorflow/lite/tools/optimize:testdata/mixed.bin",
+        "//tensorflow/lite/tools/optimize:testdata/mixed16x8.bin",
         "//tensorflow/lite/tools/optimize:testdata/multi_input_add_reshape.bin",
         "//tensorflow/lite/tools/optimize:testdata/pack.bin",
         "//tensorflow/lite/tools/optimize:testdata/single_avg_pool_min_minus_5_max_plus_5.bin",
@@ -296,6 +302,7 @@ tf_cc_test(
         "//tensorflow/lite/tools/optimize:testdata/split.bin",
         "//tensorflow/lite/tools/optimize:testdata/svdf_calibrated.bin",
         "//tensorflow/lite/tools/optimize:testdata/svdf_quantized.bin",
+        "//tensorflow/lite/tools/optimize:testdata/transpose.bin",
         "//tensorflow/lite/tools/optimize:testdata/unpack.bin",
     ],
     tags = [

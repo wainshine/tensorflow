@@ -187,6 +187,7 @@ def _get_win_cuda_defines(repository_ctx):
     # the same tmp directory
     escaped_cxx_include_directories = [
         _get_nvcc_tmp_dir_for_windows(repository_ctx),
+        "C:\\\\botcode\\\\w",
     ]
     for path in escaped_include_paths.split(";"):
         if path:
@@ -691,6 +692,7 @@ def _get_cuda_config(repository_ctx, find_cuda_config_script):
     return struct(
         cuda_toolkit_path = toolkit_path,
         cuda_version = cuda_version,
+        cuda_version_major = cuda_major,
         cublas_version = cublas_version,
         cusolver_version = cusolver_version,
         curand_version = curand_version,
@@ -775,6 +777,7 @@ def _create_dummy_repository(repository_ctx):
             "%{curand_lib}": lib_name("curand", cpu_value),
             "%{cupti_lib}": lib_name("cupti", cpu_value),
             "%{cusparse_lib}": lib_name("cusparse", cpu_value),
+            "%{cub_actual}": ":cuda_headers",
             "%{copy_rules}": """
 filegroup(name="cuda-include")
 filegroup(name="cublas-include")
@@ -1062,35 +1065,35 @@ def _create_local_cuda_repository(repository_ctx):
     ))
 
     # copy files mentioned in third_party/nccl/build_defs.bzl.tpl
+    file_ext = ".exe" if is_windows(repository_ctx) else ""
     copy_rules.append(make_copy_files_rule(
         repository_ctx,
         name = "cuda-bin",
         srcs = [
             cuda_config.cuda_toolkit_path + "/bin/" + "crt/link.stub",
-            cuda_config.cuda_toolkit_path + "/bin/" + "nvlink",
-            cuda_config.cuda_toolkit_path + "/bin/" + "fatbinary",
-            cuda_config.cuda_toolkit_path + "/bin/" + "bin2c",
+            cuda_config.cuda_toolkit_path + "/bin/" + "nvlink" + file_ext,
+            cuda_config.cuda_toolkit_path + "/bin/" + "fatbinary" + file_ext,
+            cuda_config.cuda_toolkit_path + "/bin/" + "bin2c" + file_ext,
         ],
         outs = [
             "cuda/bin/" + "crt/link.stub",
-            "cuda/bin/" + "nvlink",
-            "cuda/bin/" + "fatbinary",
-            "cuda/bin/" + "bin2c",
+            "cuda/bin/" + "nvlink" + file_ext,
+            "cuda/bin/" + "fatbinary" + file_ext,
+            "cuda/bin/" + "bin2c" + file_ext,
         ],
     ))
 
     # Select the headers based on the cuDNN version (strip '64_' for Windows).
-    if cuda_config.cudnn_version.rsplit("_", 1)[0] < "8":
-        cudnn_headers = ["cudnn.h"]
-    else:
-        cudnn_headers = [
+    cudnn_headers = ["cudnn.h"]
+    if cuda_config.cudnn_version.rsplit("_", 1)[0] >= "8":
+        cudnn_headers += [
+            "cudnn_backend.h",
             "cudnn_adv_infer.h",
             "cudnn_adv_train.h",
             "cudnn_cnn_infer.h",
             "cudnn_cnn_train.h",
             "cudnn_ops_infer.h",
             "cudnn_ops_train.h",
-            "cudnn.h",
             "cudnn_version.h",
         ]
 
@@ -1121,6 +1124,10 @@ def _create_local_cuda_repository(repository_ctx):
         },
     )
 
+    cub_actual = "@cub_archive//:cub"
+    if int(cuda_config.cuda_version_major) >= 11:
+        cub_actual = ":cuda_headers"
+
     repository_ctx.template(
         "cuda/BUILD",
         tpl_paths["cuda:BUILD"],
@@ -1136,6 +1143,7 @@ def _create_local_cuda_repository(repository_ctx):
             "%{curand_lib}": _basename(repository_ctx, cuda_libs["curand"]),
             "%{cupti_lib}": _basename(repository_ctx, cuda_libs["cupti"]),
             "%{cusparse_lib}": _basename(repository_ctx, cuda_libs["cusparse"]),
+            "%{cub_actual}": cub_actual,
             "%{copy_rules}": "\n".join(copy_rules),
         },
     )
